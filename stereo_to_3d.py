@@ -120,9 +120,9 @@ def point_cloud_from_feature_points(disparity, points, rgb=[]):
             # add to points_3d
 
             if(len(rgb) > 0):
-                points_3d.append([X,Y,Z,rgb[y,x,2], rgb[y,x,1],rgb[y,x,0]]);
+                points_3d.append((X,Y,Z,rgb[y,x,2], rgb[y,x,1],rgb[y,x,0]));
             else:
-                points_3d.append([X,Y,Z]);
+                points_3d.append((X,Y,Z));
 
     return points_3d
 
@@ -182,8 +182,8 @@ def load_images(img_name, display=False, prnt=False):
         # remember to convert to grayscale (as the disparity matching works on grayscale)
         # N.B. need to do for both as both are 3-channel images
 
-        #grayL = cv2.cvtColor(imgL,cv2.COLOR_BGR2GRAY);
-        #grayR = cv2.cvtColor(imgR,cv2.COLOR_BGR2GRAY);
+        imgL = cv2.cvtColor(imgL,cv2.COLOR_BGR2GRAY);
+        imgR = cv2.cvtColor(imgR,cv2.COLOR_BGR2GRAY);
 
         if display:
             cv2.imshow("left", grayL)
@@ -195,8 +195,11 @@ def compute_disparity(imgL, imgR, display=False):
     # setup the disparity stereo processor to find a maximum of 128 disparity values
     # (adjust parameters if needed - this will effect speed to processing)
 
-    grayL = cv2.cvtColor(imgL,cv2.COLOR_BGR2GRAY);
-    grayR = cv2.cvtColor(imgR,cv2.COLOR_BGR2GRAY);
+    grayL = imgL
+    grayR = imgR
+    if isinstance(imgL[0][0], list): # If not grayscale (and hance has a list for each pixel)
+        grayL = cv2.cvtColor(imgL,cv2.COLOR_BGR2GRAY);
+        grayR = cv2.cvtColor(imgR,cv2.COLOR_BGR2GRAY);
 
     max_disparity = 128;
     stereoProcessor = cv2.StereoSGBM_create(0, max_disparity, 21);
@@ -234,16 +237,67 @@ def draw_circle(event,x,y,flags,param):
         #cv2.circle(img,(x,y),100,(255,0,0),-1)
         print(x, y)
 
-def find_n_best_feature_points(imgL, imgR, n, thresh=100, draw=False):
+def find_n_best_feature_points(imgL, imgR, n, thresh=100, draw=False, binning=False, binsx=3, binsy=3, cutoff=0):
     #fast = cv2.FastFeatureDetector_create(threshold=thresh)
     #kpL = fast.detect(imgL, None)
     #kpR = fast.detect(imgR, None)
 
-    
+    orb = cv2.ORB_create(nfeatures=n)
+    kpL = []
+    kpR = []
+    desL = []
+    desR = []
+    if binning:
+        w = imgL.shape[1]
+        h = imgL.shape[0] - imgL.shape[0]*cutoff
+        #print(w, h)
+        for i in range(0, binsx):
+            for j in range(0, binsy):
+                # The indices of the regions of image to look at
+                x = int(i * w/binsx)
+                y = int(j * h/binsy)
+                x2 = int((i+1) * w/binsx - 1)
+                y2 = int((j+1) * h/binsy - 1)
+                #print(x, y, x2, y2)
+                
+                orb = cv2.ORB_create(nfeatures=n)
 
-    orb = cv2.ORB_create()
-    kpL, desL = orb.detectAndCompute(imgL, None)
-    kpR, desR = orb.detectAndCompute(imgR, None)
+                # Get features of that image section
+                k_sect, d = orb.detectAndCompute(imgL[y:y2, x:x2], None)
+                k = [] # Will hold the keypoints that have been offset based on which image region they are in
+                for point in range(0, len(k_sect)):
+                    newres = k_sect[point].response
+                    newx = k_sect[point].pt[0]+x
+                    newy = k_sect[point].pt[1]+y
+                    news = k_sect[point].size
+                    #print(i, j, x, y, newx, newy, k_sect[point].pt[0], k_sect[point].pt[1])
+                    newkp = cv2.KeyPoint(x=newx, y=newy, _size=news, _response=newres)
+                    k.append(newkp)
+                #imgL = cv2.drawKeypoints(imgL, k, imgL, color=(0,255,0))
+                #cv2.imshow("section", imgL[y:y2, x:x2])
+                #cv2.waitKey(0)
+                if len(k) > 0 and len(d) > 0:
+                    kpL.extend(k)
+                    desL.extend(d)
+
+                k_sect, d = orb.detectAndCompute(imgR[y:y2, x:x2], None)
+                k = [] # Will hold the keypoints that have been offset based on which image region they are in
+                for point in range(0, len(k_sect)):
+                    newres = k_sect[point].response
+                    newx = k_sect[point].pt[0]+x
+                    newy = k_sect[point].pt[1]+y
+                    news = k_sect[point].size
+                    newkp = cv2.KeyPoint(x=newx, y=newy, _size=news, _response=newres)
+                    k.append(newkp)
+                if len(k) > 0 and len(d) > 0:
+                    kpR.extend(k)
+                    desR.extend(d)
+        desR = np.array(desR)
+        desL = np.array(desL)
+    else:
+        kpL, desL = orb.detectAndCompute(imgL, None)
+        kpR, desR = orb.detectAndCompute(imgR, None)
+    #print(kpL, desL)
     #print(list(zip(kpL, desL)))
  
     # Get the keypoint, descriptor pairs in order based off the response value of the keypoint
@@ -286,7 +340,6 @@ def find_n_best_feature_points(imgL, imgR, n, thresh=100, draw=False):
     else:
         kpL = kpR = [] # Return no keypoints if n too big
     """
-    
 
     #print([(f.pt[0], f.pt[1]) for f in pointsR])
     if draw and imgL is not None:
